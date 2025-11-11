@@ -1,5 +1,4 @@
-import os, random, requests
-import numpy as np
+import os, random, requests, tempfile
 from moviepy.editor import VideoFileClip, CompositeVideoClip, ImageClip
 from PIL import Image, ImageDraw, ImageFont
 
@@ -8,8 +7,8 @@ INPUT_DIR = "reels_downloads"
 OUTPUT_DIR = "output_reels"
 WATERMARK_TEXT = "@my_page"
 FONT_SIZE = 50
-FONT_COLOR = (255, 255, 255, 255)     # RGBA white
-STROKE_COLOR = (0, 0, 0, 255)         # RGBA black
+FONT_COLOR = (255, 255, 255, 255)
+STROKE_COLOR = (0, 0, 0, 255)
 STROKE_WIDTH = 2
 
 EMOJIS = ["🔥", "💫", "🎬", "✨", "⚡", "🎵"]
@@ -17,7 +16,7 @@ HASHTAGS = ["#reels", "#foryou", "#explore", "#trending", "#viral"]
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# === Download Roboto font if missing ===
+# === Download font if missing ===
 FONT_PATH = "Roboto-Regular.ttf"
 if not os.path.exists(FONT_PATH):
     print("📥 Downloading Roboto font for watermark text...")
@@ -27,45 +26,46 @@ if not os.path.exists(FONT_PATH):
         f.write(r.content)
     print("✅ Font downloaded successfully")
 
+
 def make_watermark(text, duration, w, h):
-    """Create watermark image using Pillow and convert to MoviePy ImageClip."""
+    """Render watermark text to a temporary PNG file and load as ImageClip."""
     try:
+        # Draw text on transparent RGBA image
         img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
         font = ImageFont.truetype(FONT_PATH, FONT_SIZE)
-
-        # Measure text size
         text_w, text_h = draw.textsize(text, font=font)
 
-        # Bottom-right placement
         x = w - text_w - 40
         y = h - text_h - 40
 
-        # Draw outline
+        # Outline
         for dx in range(-STROKE_WIDTH, STROKE_WIDTH + 1):
             for dy in range(-STROKE_WIDTH, STROKE_WIDTH + 1):
                 draw.text((x + dx, y + dy), text, font=font, fill=STROKE_COLOR)
-
-        # Draw main text
+        # Main text
         draw.text((x, y), text, font=font, fill=FONT_COLOR)
 
-        # Convert to MoviePy-compatible array
-        img_array = np.asarray(img).astype("uint8")
+        # Save to a temporary PNG file
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            img.save(tmp.name, format="PNG")
+            tmp_path = tmp.name
 
-        # Create a small clip from the watermark image
+        # Load the saved image as an ImageClip
         watermark_clip = (
-            ImageClip(img_array, ismask=False)
+            ImageClip(tmp_path)
             .set_duration(duration)
             .set_position(("right", "bottom"))
-            .resize(width=text_w + 80)  # optional scale
+            .margin(right=40, bottom=40)
         )
         return watermark_clip
 
     except Exception as e:
-        print(f"⚠️ Warning: Pillow watermark failed ({e}), skipping watermark.")
+        print(f"⚠️  Warning: Pillow watermark failed ({e}), skipping watermark.")
         return None
 
-# === MAIN PROCESSING LOOP ===
+
+# === MAIN PROCESS ===
 for file in sorted(os.listdir(INPUT_DIR)):
     if not file.lower().endswith(".mp4"):
         continue
@@ -76,12 +76,12 @@ for file in sorted(os.listdir(INPUT_DIR)):
     output_video_path = os.path.join(OUTPUT_DIR, f"{base}.mp4")
     output_caption_path = os.path.join(OUTPUT_DIR, f"{base}.txt")
 
-    print(f"🎞️ Processing {video_path} ...")
+    print(f"🎞️  Processing {video_path} ...")
 
     clip = VideoFileClip(video_path)
     w, h = clip.size
 
-    # Trim and speed change
+    # Trim & speed
     start = 0.2
     end = max(clip.duration - 0.2, 0.5)
     subclip = clip.subclip(start, end)
@@ -92,22 +92,21 @@ for file in sorted(os.listdir(INPUT_DIR)):
     watermark = make_watermark(WATERMARK_TEXT, subclip.duration, w, h)
     final_clip = CompositeVideoClip([subclip, watermark]) if watermark else subclip
 
-    # Export video
+    # Export
     final_clip.write_videofile(
         output_video_path,
         codec="libx264",
         audio_codec="aac",
         threads=4,
-        logger=None
+        logger=None,
     )
 
-    # Caption tweaks
+    # Caption
     if os.path.exists(caption_path):
         with open(caption_path, "r", encoding="utf-8") as f:
             caption = f.read().strip()
     else:
         caption = ""
-
     caption += f" {random.choice(EMOJIS)}\n{random.choice(HASHTAGS)}"
     with open(output_caption_path, "w", encoding="utf-8") as f:
         f.write(caption)
@@ -115,6 +114,6 @@ for file in sorted(os.listdir(INPUT_DIR)):
     clip.close()
     subclip.close()
     final_clip.close()
-    print(f"✅ Done: {output_video_path}")
+    print(f"✅  Done: {output_video_path}")
 
-print("🎉 All videos processed successfully!")
+print("🎉  All videos processed successfully!")
