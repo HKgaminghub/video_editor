@@ -1,15 +1,15 @@
 import os, random, requests
+import numpy as np
 from moviepy.editor import VideoFileClip, CompositeVideoClip, ImageClip
 from PIL import Image, ImageDraw, ImageFont
-import numpy as np
 
 # === CONFIGURATION ===
 INPUT_DIR = "reels_downloads"
 OUTPUT_DIR = "output_reels"
 WATERMARK_TEXT = "@my_page"
 FONT_SIZE = 50
-FONT_COLOR = "white"
-STROKE_COLOR = "black"
+FONT_COLOR = (255, 255, 255, 255)     # RGBA white
+STROKE_COLOR = (0, 0, 0, 255)         # RGBA black
 STROKE_WIDTH = 2
 
 EMOJIS = ["🔥", "💫", "🎬", "✨", "⚡", "🎵"]
@@ -17,7 +17,7 @@ HASHTAGS = ["#reels", "#foryou", "#explore", "#trending", "#viral"]
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# === Ensure a Font Exists (GitHub runners have none) ===
+# === Download Roboto font if missing ===
 FONT_PATH = "Roboto-Regular.ttf"
 if not os.path.exists(FONT_PATH):
     print("📥 Downloading Roboto font for watermark text...")
@@ -28,9 +28,8 @@ if not os.path.exists(FONT_PATH):
     print("✅ Font downloaded successfully")
 
 def make_watermark(text, duration, w, h):
-    """Create watermark image using Pillow instead of MoviePy TextClip."""
+    """Create watermark image using Pillow and convert to MoviePy ImageClip."""
     try:
-        # Create transparent image
         img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
         font = ImageFont.truetype(FONT_PATH, FONT_SIZE)
@@ -38,11 +37,11 @@ def make_watermark(text, duration, w, h):
         # Measure text size
         text_w, text_h = draw.textsize(text, font=font)
 
-        # Coordinates (bottom-right corner)
+        # Bottom-right placement
         x = w - text_w - 40
         y = h - text_h - 40
 
-        # Draw stroke (outline)
+        # Draw outline
         for dx in range(-STROKE_WIDTH, STROKE_WIDTH + 1):
             for dy in range(-STROKE_WIDTH, STROKE_WIDTH + 1):
                 draw.text((x + dx, y + dy), text, font=font, fill=STROKE_COLOR)
@@ -50,16 +49,23 @@ def make_watermark(text, duration, w, h):
         # Draw main text
         draw.text((x, y), text, font=font, fill=FONT_COLOR)
 
-        # Convert PIL image to MoviePy ImageClip
-        img_array = np.array(img)
-        clip = ImageClip(img_array, transparent=True).set_duration(duration)
-        return clip
+        # Convert to MoviePy-compatible array
+        img_array = np.asarray(img).astype("uint8")
+
+        # Create a small clip from the watermark image
+        watermark_clip = (
+            ImageClip(img_array, ismask=False)
+            .set_duration(duration)
+            .set_position(("right", "bottom"))
+            .resize(width=text_w + 80)  # optional scale
+        )
+        return watermark_clip
 
     except Exception as e:
         print(f"⚠️ Warning: Pillow watermark failed ({e}), skipping watermark.")
         return None
 
-# === PROCESSING LOOP ===
+# === MAIN PROCESSING LOOP ===
 for file in sorted(os.listdir(INPUT_DIR)):
     if not file.lower().endswith(".mp4"):
         continue
@@ -75,20 +81,18 @@ for file in sorted(os.listdir(INPUT_DIR)):
     clip = VideoFileClip(video_path)
     w, h = clip.size
 
-    # Trim 0.2s from start & end
+    # Trim and speed change
     start = 0.2
     end = max(clip.duration - 0.2, 0.5)
     subclip = clip.subclip(start, end)
-
-    # Slight random speed change (1–3%)
     speed = 1 + random.uniform(0.01, 0.03)
     subclip = subclip.fx(lambda c: c.speedx(speed))
 
-    # Add Pillow-based watermark
+    # Add watermark
     watermark = make_watermark(WATERMARK_TEXT, subclip.duration, w, h)
     final_clip = CompositeVideoClip([subclip, watermark]) if watermark else subclip
 
-    # Export edited video
+    # Export video
     final_clip.write_videofile(
         output_video_path,
         codec="libx264",
@@ -97,7 +101,7 @@ for file in sorted(os.listdir(INPUT_DIR)):
         logger=None
     )
 
-    # Modify caption text
+    # Caption tweaks
     if os.path.exists(caption_path):
         with open(caption_path, "r", encoding="utf-8") as f:
             caption = f.read().strip()
