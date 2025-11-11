@@ -23,8 +23,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install moviepy==1.0.3 Pillow imageio[ffmpeg] requests numpy
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg fonts-roboto fonts-dejavu-core
           echo "✅ Dependencies installed"
+
 
       - name: Run video editor script
         run: python auto_edit_my_reels.py
