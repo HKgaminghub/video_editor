@@ -1,7 +1,6 @@
+# auto_edit_my_reels.py
 import os
 import random
-import tempfile
-
 import numpy as np
 from moviepy.editor import VideoFileClip, CompositeVideoClip, ImageClip, vfx
 from PIL import Image, ImageDraw, ImageFont
@@ -38,16 +37,16 @@ def resolve_font(size_px: int):
     return ImageFont.load_default()
 
 # =========================
-# TEXT-ONLY WATERMARK (no black fringe)
+# TEXT-ONLY WATERMARK (no PNG, no black bar)
 # =========================
-def make_watermark(text: str, duration: float, w: int, h: int) -> ImageClip | None:
+def make_watermark_clip(text: str, duration: float, frame_w: int, frame_h: int):
     """
-    White text with black stroke on a fully transparent canvas.
-    Uses alpha-premultiplication to prevent black bars/edges in ffmpeg composition.
+    Builds the watermark as an RGB clip with a separate MoviePy mask (alpha),
+    so ffmpeg never sees a premultiplied PNG. This eliminates black bars.
     """
     try:
-        font_px  = max(28, int(h * 0.05))        # ~5% of video height
-        stroke_w = max(2,  int(font_px * 0.08))  # proportional stroke
+        font_px  = max(28, int(frame_h * 0.05))        # ~5% of video height
+        stroke_w = max(2,  int(font_px * 0.08))        # proportional stroke
         font     = resolve_font(font_px)
 
         # Measure tight bounding box
@@ -59,7 +58,7 @@ def make_watermark(text: str, duration: float, w: int, h: int) -> ImageClip | No
             bbox = d.textbbox((0, 0), text, font=font)
         text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
 
-        # Render text to RGBA
+        # Render RGBA with Pillow
         img = Image.new("RGBA", (text_w, text_h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
         try:
@@ -75,41 +74,32 @@ def make_watermark(text: str, duration: float, w: int, h: int) -> ImageClip | No
                     draw.text((dx, dy), text, font=font, fill=(0, 0, 0, 255))
             draw.text((0, 0), text, font=font, fill=(255, 255, 255, 255))
 
-        # --- Alpha premultiplication to avoid black fringe/bars in encoding ---
-        arr = np.asarray(img).astype(np.float32) / 255.0   # HxWx4, RGBA in [0,1]
-        rgb = arr[..., :3] * arr[..., 3:4]                 # multiply by alpha
-        arr_premul = np.concatenate([rgb, arr[..., 3:4]], axis=-1)
-        img_p = Image.fromarray((arr_premul * 255).astype(np.uint8), mode="RGBA")
-        # ----------------------------------------------------------------------
+        # Split RGB and Alpha (mask) and hand both directly to MoviePy
+        arr = np.array(img)  # HxWx4 uint8
+        rgb = arr[..., :3]
+        alpha = arr[..., 3]  # HxW
 
-        # Save tight PNG & wrap as MoviePy ImageClip
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmpf:
-            img_p.save(tmpf.name, "PNG")
-            path = tmpf.name
+        # Create the RGB clip and the mask clip
+        txt_clip = ImageClip(rgb, ismask=False)
+        mask_clip = ImageClip(alpha / 255.0, ismask=True)  # MoviePy mask must be float in [0,1]
+        txt_clip = txt_clip.set_mask(mask_clip).set_duration(duration)
 
-        margin_r = max(40, int(w * 0.035))
-        margin_b = max(40, int(h * 0.035))
+        # Position (avoid .margin to rule it out)
+        margin_r = max(40, int(frame_w * 0.035))
+        margin_b = max(40, int(frame_h * 0.035))
+        x = frame_w - text_w - margin_r
+        y = frame_h - text_h - margin_b
 
-        return (
-            ImageClip(path)
-            .set_duration(duration)
-            .set_position(("right", "bottom"))
-            .margin(right=margin_r, bottom=margin_b)
-        )
-
+        return txt_clip.set_position((x, y))
     except Exception as e:
-        print(f"⚠️  Watermark generation failed ({e}), skipping watermark.")
+        print(f"⚠️  Watermark build failed: {e}")
         return None
 
 # =========================
 # MAIN PROCESS
 # =========================
 def main():
-    if not os.path.isdir(INPUT_DIR):
-        print(f"⚠️  Input folder '{INPUT_DIR}' not found. Nothing to process.")
-        return
-
-    files = sorted(f for f in os.listdir(INPUT_DIR) if f.lower().endswith(".mp4"))
+    files = sorted(f for f in os.listdir(INPUT_DIR) if f.lower().endswith(".mp4")) if os.path.isdir(INPUT_DIR) else []
     if not files:
         print("ℹ️  No MP4 files found. Place videos in 'reels_downloads/' and rerun.")
         return
@@ -140,9 +130,9 @@ def main():
             speed = 1 + random.uniform(0.01, 0.03)
             subclip = subclip.fx(vfx.speedx, speed)
 
-            # Watermark (text-only, premultiplied)
-            watermark = make_watermark(WATERMARK_TEXT, subclip.duration, w, h)
-            final_clip = CompositeVideoClip([subclip, watermark]) if watermark else subclip
+            # Watermark as RGB + mask (no PNG)
+            wm = make_watermark_clip(WATERMARK_TEXT, subclip.duration, w, h)
+            final_clip = CompositeVideoClip([subclip, wm]) if wm else subclip
 
             # Keep FPS stable (source fps if known, else 30)
             try:
@@ -150,44 +140,37 @@ def main():
             except Exception:
                 fps = 30
 
-            # Export
+            # Export (force yuv420p for social media players)
             final_clip.write_videofile(
                 output_video_path,
                 codec="libx264",
                 audio_codec="aac",
                 threads=4,
                 fps=fps,
+                ffmpeg_params=["-pix_fmt", "yuv420p"],
                 logger=None,
             )
 
             # Caption handling
+            caption = ""
             if os.path.exists(caption_path):
                 with open(caption_path, "r", encoding="utf-8") as f:
                     caption = f.read().strip()
-            else:
-                caption = ""
-
             caption = (caption + " " + random.choice(EMOJIS)).strip()
             caption += f"\n{random.choice(HASHTAGS)}"
-
             with open(output_caption_path, "w", encoding="utf-8") as f:
                 f.write(caption)
 
             print(f"✅  Done: {output_video_path}")
-
         except Exception as e:
             print(f"❌ Error processing '{video_path}': {e}")
-
         finally:
-            # Clean up resources
             try:
-                if 'final_clip' in locals() and final_clip is not clip:
-                    final_clip.close()
+                final_clip.close()
             except Exception:
                 pass
             try:
-                if 'subclip' in locals() and subclip is not clip:
-                    subclip.close()
+                subclip.close()
             except Exception:
                 pass
             try:
