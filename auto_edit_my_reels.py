@@ -1,6 +1,5 @@
 import os
 import random
-import sys
 import tempfile
 
 from moviepy.editor import VideoFileClip, CompositeVideoClip, ImageClip, vfx
@@ -11,119 +10,87 @@ from PIL import Image, ImageDraw, ImageFont
 # =========================
 INPUT_DIR = "reels_downloads"
 OUTPUT_DIR = "output_reels"
-WATERMARK_TEXT = "@my_page"
+WATERMARK_TEXT = "@my_page"  # <-- change to your handle
 
-# Visual defaults (tuned for vertical videos like 1080x1920)
 EMOJIS = ["🔥", "💫", "🎬", "✨", "⚡", "🎵"]
 HASHTAGS = ["#reels", "#foryou", "#explore", "#trending", "#viral"]
 
-# Create output directory
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-
 # =========================
-# FONT RESOLUTION (robust)
+# FONT RESOLUTION
 # =========================
-SYSTEM_FONTS = [
+SYSTEM_FONTS = (
     "/usr/share/fonts/truetype/roboto/Roboto-Regular.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "Roboto-Regular.ttf",  # optional local fallback if you commit the file
-]
+)
 
-def resolve_font(size_px: int) -> ImageFont.FreeTypeFont:
-    """
-    Try common system fonts installed in the workflow (Roboto/DejaVu),
-    then fall back to Pillow's default if none work.
-    """
-    for path in SYSTEM_FONTS:
-        if os.path.exists(path):
-            try:
-                return ImageFont.truetype(path, size_px)
-            except Exception:
-                pass
-    # Final fallback: load_default (bitmap) - not ideal, but prevents failure
+def resolve_font(size_px: int):
+    """Try common system fonts; fall back to Pillow default."""
+    for p in SYSTEM_FONTS:
+        try:
+            if os.path.exists(p):
+                return ImageFont.truetype(p, size_px)
+        except Exception:
+            continue
     return ImageFont.load_default()
 
-
 # =========================
-# WATERMARK MAKER (visible)
+# TEXT-ONLY WATERMARK
 # =========================
-def make_watermark_badge(text: str, duration: float, w: int, h: int) -> ImageClip | None:
+def make_watermark(text: str, duration: float, w: int, h: int) -> ImageClip | None:
     """
-    Creates a compact RGBA badge (rounded dark background + white text + stroke),
-    sized relative to video height for consistent visibility. Returns an ImageClip.
+    White text with black stroke, NO background.
+    Produces a tightly-cropped transparent PNG so no black/gray box appears.
     """
     try:
-        # ~5% of video height is a good watermark size (tweak if desired)
-        font_px = max(28, int(h * 0.05))
-        pad_x = max(12, int(font_px * 0.5))
-        pad_y = max(6, int(font_px * 0.3))
-        stroke_w = max(2, int(font_px * 0.08))
+        font_px  = max(28, int(h * 0.05))       # ~5% of video height
+        stroke_w = max(2,  int(font_px * 0.08)) # proportional stroke
+        font     = resolve_font(font_px)
 
-        font = resolve_font(font_px)
-
-        # Measure text
-        tmp_img = Image.new("RGBA", (10, 10), (0, 0, 0, 0))
-        tmp_draw = ImageDraw.Draw(tmp_img)
+        # Measure text tightly
+        tmp = Image.new("RGBA", (10, 10), (0, 0, 0, 0))
+        drw = ImageDraw.Draw(tmp)
         try:
-            bbox = tmp_draw.textbbox((0, 0), text, font=font, stroke_width=stroke_w)
+            bbox = drw.textbbox((0, 0), text, font=font, stroke_width=stroke_w)
         except TypeError:
-            bbox = tmp_draw.textbbox((0, 0), text, font=font)
+            bbox = drw.textbbox((0, 0), text, font=font)
         text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
 
-        badge_w = text_w + pad_x * 2
-        badge_h = text_h + pad_y * 2
-
-        # Draw badge
-        badge = Image.new("RGBA", (badge_w, badge_h), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(badge)
-
-        # Semi-transparent rounded rect background
-        bg = (0, 0, 0, 120)  # increase alpha (last value) if you want stronger contrast
-        radius = max(6, int(badge_h * 0.3))
+        # Render tight image (no background)
+        img = Image.new("RGBA", (text_w, text_h), (0, 0, 0, 0))
+        d2  = ImageDraw.Draw(img)
         try:
-            draw.rounded_rectangle((0, 0, badge_w, badge_h), radius=radius, fill=bg)
-        except AttributeError:
-            draw.rectangle((0, 0, badge_w, badge_h), fill=bg)
-
-        # Text with stroke for crisp edges
-        text_pos = (pad_x, pad_y)
-        try:
-            draw.text(
-                text_pos,
-                text,
-                font=font,
+            d2.text(
+                (0, 0), text, font=font,
                 fill=(255, 255, 255, 255),
-                stroke_width=stroke_w,
-                stroke_fill=(0, 0, 0, 255),
+                stroke_width=stroke_w, stroke_fill=(0, 0, 0, 255)
             )
         except TypeError:
-            # Very old Pillow: manual shadow
+            # Manual stroke fallback for very old Pillow
             for dx in (-stroke_w, 0, stroke_w):
                 for dy in (-stroke_w, 0, stroke_w):
-                    draw.text((text_pos[0] + dx, text_pos[1] + dy), text, font=font, fill=(0, 0, 0, 255))
-            draw.text(text_pos, text, font=font, fill=(255, 255, 255, 255))
+                    d2.text((dx, dy), text, font=font, fill=(0, 0, 0, 255))
+            d2.text((0, 0), text, font=font, fill=(255, 255, 255, 255))
 
-        # Save to a temporary PNG & wrap as ImageClip
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-            badge.save(tmp.name, "PNG")
-            tmp_path = tmp.name
+        # Save PNG & wrap as ImageClip
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmpf:
+            img.save(tmpf.name, "PNG")
+            path = tmpf.name
 
         margin_r = max(40, int(w * 0.035))
         margin_b = max(40, int(h * 0.035))
 
         return (
-            ImageClip(tmp_path)
+            ImageClip(path)
             .set_duration(duration)
-            .set_opacity(0.92)
             .set_position(("right", "bottom"))
             .margin(right=margin_r, bottom=margin_b)
         )
-
     except Exception as e:
         print(f"⚠️  Warning: watermark generation failed ({e}), skipping watermark.")
         return None
-
 
 # =========================
 # MAIN PROCESS
@@ -164,8 +131,8 @@ def main():
             speed = 1 + random.uniform(0.01, 0.03)
             subclip = subclip.fx(vfx.speedx, speed)
 
-            # Watermark
-            watermark = make_watermark_badge(WATERMARK_TEXT, subclip.duration, w, h)
+            # Watermark (text only)
+            watermark = make_watermark(WATERMARK_TEXT, subclip.duration, w, h)
             final_clip = CompositeVideoClip([subclip, watermark]) if watermark else subclip
 
             # Keep FPS stable (source fps if known, else 30)
@@ -203,7 +170,6 @@ def main():
             print(f"❌ Error processing '{video_path}': {e}")
 
         finally:
-            # Clean up resources
             try:
                 if 'final_clip' in locals() and final_clip is not clip:
                     final_clip.close()
@@ -221,8 +187,6 @@ def main():
 
     print("🎉  All videos processed successfully!")
 
-
 if __name__ == "__main__":
-    # Ensure deterministic emoji/hashtag if needed by CI (comment out to keep random)
     random.seed()
     main()
