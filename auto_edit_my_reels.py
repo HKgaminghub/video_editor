@@ -1,8 +1,6 @@
 import os, random
-from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
-
-# === FIX: disable ImageMagick and use Pillow backend ===
-os.environ["IMAGEMAGICK_BINARY"] = "unset"
+from moviepy.editor import VideoFileClip, CompositeVideoClip
+from moviepy.video.VideoClip import TextClip
 
 # === CONFIGURATION ===
 INPUT_DIR = "reels_downloads"          # your folder with 1.mp4, 1.txt, etc.
@@ -17,6 +15,20 @@ HASHTAGS = ["#reels", "#foryou", "#explore", "#trending", "#viral"]
 
 # Create output folder if not exists
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+def make_watermark(text, duration):
+    """Use PIL-based text rendering (no ImageMagick required)."""
+    try:
+        return (TextClip(text,
+                         fontsize=FONT_SIZE,
+                         color=FONT_COLOR,
+                         method="caption")  # uses Pillow
+                .set_duration(duration)
+                .set_position(("right", "bottom"))
+                .margin(right=40, bottom=40, opacity=0))
+    except Exception as e:
+        print(f"⚠️ Warning: TextClip failed ({e}), skipping watermark.")
+        return None
 
 # === PROCESSING LOOP ===
 for file in sorted(os.listdir(INPUT_DIR)):
@@ -43,24 +55,21 @@ for file in sorted(os.listdir(INPUT_DIR)):
     speed = 1 + random.uniform(0.01, 0.03)
     subclip = subclip.fx(lambda c: c.speedx(speed))
 
-    # Add watermark (using Pillow, no ImageMagick)
-    watermark = (
-        TextClip(WATERMARK_TEXT,
-                 fontsize=FONT_SIZE,
-                 color=FONT_COLOR,
-                 method="caption")  # <--- uses Pillow, safe in GitHub Actions
-        .set_duration(subclip.duration)
-        .set_position(("right", "bottom"))
-        .margin(right=40, bottom=40, opacity=0)
-    )
-    final_clip = CompositeVideoClip([subclip, watermark])
+    # Add watermark (if possible)
+    watermark = make_watermark(WATERMARK_TEXT, subclip.duration)
+    if watermark:
+        final_clip = CompositeVideoClip([subclip, watermark])
+    else:
+        final_clip = subclip
 
     # Export edited video
-    final_clip.write_videofile(output_video_path,
-                               codec="libx264",
-                               audio_codec="aac",
-                               threads=4,
-                               logger=None)
+    final_clip.write_videofile(
+        output_video_path,
+        codec="libx264",
+        audio_codec="aac",
+        threads=4,
+        logger=None
+    )
 
     # Modify caption text
     if os.path.exists(caption_path):
@@ -69,13 +78,11 @@ for file in sorted(os.listdir(INPUT_DIR)):
     else:
         caption = ""
 
-    # Add random emoji & hashtag to make caption slightly unique
     caption += f" {random.choice(EMOJIS)}\n{random.choice(HASHTAGS)}"
 
     with open(output_caption_path, "w", encoding="utf-8") as f:
         f.write(caption)
 
-    # Cleanup
     clip.close()
     subclip.close()
     final_clip.close()

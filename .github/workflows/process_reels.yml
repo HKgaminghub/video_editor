@@ -3,7 +3,7 @@ name: Process Reels
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 15 * * *"  # optional: every day at 8:30 PM IST
+    - cron: "0 15 * * *"
 
 jobs:
   edit_reels:
@@ -25,23 +25,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg
           echo "✅ Dependencies installed"
-          python -m pip show moviepy
 
-      - name: Verify moviepy import
-        run: |
-          python - <<'EOF'
-          try:
-              import moviepy
-              from moviepy.editor import VideoFileClip
-              print("✅ MoviePy import successful")
-          except Exception as e:
-              print("❌ MoviePy import failed:", e)
-          EOF
-
-      - name: Run the video editor script
+      - name: Run video editor
         run: python auto_edit_my_reels.py
 
-      - name: Commit and push processed output
+      - name: Commit and push processed files
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
