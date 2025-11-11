@@ -2,8 +2,6 @@ name: Process Reels
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 15 * * *" # 15:00 UTC daily
 
 permissions:
   contents: write
