@@ -1,156 +1,228 @@
-import os, random, requests, tempfile
+import os
+import random
+import sys
+import tempfile
+
 from moviepy.editor import VideoFileClip, CompositeVideoClip, ImageClip, vfx
 from PIL import Image, ImageDraw, ImageFont
 
-# === CONFIGURATION ===
+# =========================
+# CONFIGURATION
+# =========================
 INPUT_DIR = "reels_downloads"
 OUTPUT_DIR = "output_reels"
 WATERMARK_TEXT = "@my_page"
-FONT_SIZE = 50
-FONT_COLOR = (255, 255, 255, 255)
-STROKE_COLOR = (0, 0, 0, 255)
-STROKE_WIDTH = 2
 
+# Visual defaults (tuned for vertical videos like 1080x1920)
 EMOJIS = ["🔥", "💫", "🎬", "✨", "⚡", "🎵"]
 HASHTAGS = ["#reels", "#foryou", "#explore", "#trending", "#viral"]
 
+# Create output directory
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# === Font resolution ===
-LOCAL_FONT = "Roboto-Regular.ttf"
+
+# =========================
+# FONT RESOLUTION (robust)
+# =========================
 SYSTEM_FONTS = [
     "/usr/share/fonts/truetype/roboto/Roboto-Regular.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "Roboto-Regular.ttf",  # optional local fallback if you commit the file
 ]
 
-def ensure_local_font(path=LOCAL_FONT):
-    """Download a valid TTF if we truly need a local file; validate response."""
-    if os.path.exists(path):
-        return path
-    print("📥 Downloading Roboto font for watermark text (fallback)...")
-    url = "https://github.com/google/fonts/raw/main/apache/roboto/Roboto-Regular.ttf"
-    r = requests.get(url, allow_redirects=True, timeout=30)
-    r.raise_for_status()
-    # Basic content check: TTFs won't be HTML
-    if b"<html" in r.content[:200].lower():
-        raise RuntimeError("Downloaded HTML instead of TTF (rate-limited/redirect).")
-    with open(path, "wb") as f:
-        f.write(r.content)
-    print("✅ Font downloaded successfully")
-    return path
-
-def resolve_font_path():
-    for p in SYSTEM_FONTS:
-        if os.path.exists(p):
+def resolve_font(size_px: int) -> ImageFont.FreeTypeFont:
+    """
+    Try common system fonts installed in the workflow (Roboto/DejaVu),
+    then fall back to Pillow's default if none work.
+    """
+    for path in SYSTEM_FONTS:
+        if os.path.exists(path):
             try:
-                ImageFont.truetype(p, FONT_SIZE)  # probe
-                return p
+                return ImageFont.truetype(path, size_px)
             except Exception:
                 pass
+    # Final fallback: load_default (bitmap) - not ideal, but prevents failure
+    return ImageFont.load_default()
+
+
+# =========================
+# WATERMARK MAKER (visible)
+# =========================
+def make_watermark_badge(text: str, duration: float, w: int, h: int) -> ImageClip | None:
+    """
+    Creates a compact RGBA badge (rounded dark background + white text + stroke),
+    sized relative to video height for consistent visibility. Returns an ImageClip.
+    """
     try:
-        p = ensure_local_font()
-        ImageFont.truetype(p, FONT_SIZE)  # probe
-        return p
-    except Exception as e:
-        print(f"⚠️  Warning: Could not load Roboto ({e}). Falling back to default font.")
-        return None  # will use ImageFont.load_default()
+        # ~5% of video height is a good watermark size (tweak if desired)
+        font_px = max(28, int(h * 0.05))
+        pad_x = max(12, int(font_px * 0.5))
+        pad_y = max(6, int(font_px * 0.3))
+        stroke_w = max(2, int(font_px * 0.08))
 
-FONT_PATH = resolve_font_path()
+        font = resolve_font(font_px)
 
-def make_watermark(text, duration, w, h):
-    """Render watermark text to a temporary PNG file and load as ImageClip."""
-    try:
-        # Draw text on transparent RGBA image
-        img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(img)
-        font = ImageFont.truetype(FONT_PATH, FONT_SIZE) if FONT_PATH else ImageFont.load_default()
-
-        # Use textbbox for accurate size
-        bbox = draw.textbbox((0, 0), text, font=font, stroke_width=STROKE_WIDTH)
+        # Measure text
+        tmp_img = Image.new("RGBA", (10, 10), (0, 0, 0, 0))
+        tmp_draw = ImageDraw.Draw(tmp_img)
+        try:
+            bbox = tmp_draw.textbbox((0, 0), text, font=font, stroke_width=stroke_w)
+        except TypeError:
+            bbox = tmp_draw.textbbox((0, 0), text, font=font)
         text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
 
-        x = w - text_w - 40
-        y = h - text_h - 40
+        badge_w = text_w + pad_x * 2
+        badge_h = text_h + pad_y * 2
 
-        # Outline via stroke parameters (simpler & faster than manual loops if supported)
+        # Draw badge
+        badge = Image.new("RGBA", (badge_w, badge_h), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(badge)
+
+        # Semi-transparent rounded rect background
+        bg = (0, 0, 0, 120)  # increase alpha (last value) if you want stronger contrast
+        radius = max(6, int(badge_h * 0.3))
         try:
-            draw.text((x, y), text, font=font, fill=FONT_COLOR,
-                      stroke_width=STROKE_WIDTH, stroke_fill=STROKE_COLOR)
-        except TypeError:
-            # Pillow too old: do manual outline
-            for dx in range(-STROKE_WIDTH, STROKE_WIDTH + 1):
-                for dy in range(-STROKE_WIDTH, STROKE_WIDTH + 1):
-                    draw.text((x + dx, y + dy), text, font=font, fill=STROKE_COLOR)
-            draw.text((x, y), text, font=font, fill=FONT_COLOR)
+            draw.rounded_rectangle((0, 0, badge_w, badge_h), radius=radius, fill=bg)
+        except AttributeError:
+            draw.rectangle((0, 0, badge_w, badge_h), fill=bg)
 
-        # Save to a temporary PNG file
+        # Text with stroke for crisp edges
+        text_pos = (pad_x, pad_y)
+        try:
+            draw.text(
+                text_pos,
+                text,
+                font=font,
+                fill=(255, 255, 255, 255),
+                stroke_width=stroke_w,
+                stroke_fill=(0, 0, 0, 255),
+            )
+        except TypeError:
+            # Very old Pillow: manual shadow
+            for dx in (-stroke_w, 0, stroke_w):
+                for dy in (-stroke_w, 0, stroke_w):
+                    draw.text((text_pos[0] + dx, text_pos[1] + dy), text, font=font, fill=(0, 0, 0, 255))
+            draw.text(text_pos, text, font=font, fill=(255, 255, 255, 255))
+
+        # Save to a temporary PNG & wrap as ImageClip
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-            img.save(tmp.name, format="PNG")
+            badge.save(tmp.name, "PNG")
             tmp_path = tmp.name
 
-        # Load the saved image as an ImageClip
-        watermark_clip = (
+        margin_r = max(40, int(w * 0.035))
+        margin_b = max(40, int(h * 0.035))
+
+        return (
             ImageClip(tmp_path)
             .set_duration(duration)
+            .set_opacity(0.92)
             .set_position(("right", "bottom"))
-            .margin(right=40, bottom=40)
+            .margin(right=margin_r, bottom=margin_b)
         )
-        return watermark_clip
 
     except Exception as e:
-        print(f"⚠️  Warning: Pillow watermark failed ({e}), skipping watermark.")
+        print(f"⚠️  Warning: watermark generation failed ({e}), skipping watermark.")
         return None
 
-# === MAIN PROCESS ===
-for file in sorted(os.listdir(INPUT_DIR)):
-    if not file.lower().endswith(".mp4"):
-        continue
 
-    base = os.path.splitext(file)[0]
-    video_path = os.path.join(INPUT_DIR, f"{base}.mp4")
-    caption_path = os.path.join(INPUT_DIR, f"{base}.txt")
-    output_video_path = os.path.join(OUTPUT_DIR, f"{base}.mp4")
-    output_caption_path = os.path.join(OUTPUT_DIR, f"{base}.txt")
+# =========================
+# MAIN PROCESS
+# =========================
+def main():
+    if not os.path.isdir(INPUT_DIR):
+        print(f"⚠️  Input folder '{INPUT_DIR}' not found. Nothing to process.")
+        return
 
-    print(f"🎞️  Processing {video_path} ...")
+    files = sorted(f for f in os.listdir(INPUT_DIR) if f.lower().endswith(".mp4"))
+    if not files:
+        print("ℹ️  No MP4 files found. Place videos in 'reels_downloads/' and rerun.")
+        return
 
-    clip = VideoFileClip(video_path)
-    w, h = clip.size
+    for file in files:
+        base = os.path.splitext(file)[0]
+        video_path = os.path.join(INPUT_DIR, f"{base}.mp4")
+        caption_path = os.path.join(INPUT_DIR, f"{base}.txt")
+        output_video_path = os.path.join(OUTPUT_DIR, f"{base}.mp4")
+        output_caption_path = os.path.join(OUTPUT_DIR, f"{base}.txt")
 
-    # Trim & speed
-    start = 0.2
-    end = max(clip.duration - 0.2, 0.5)
-    subclip = clip.subclip(start, end)
-    speed = 1 + random.uniform(0.01, 0.03)
-    # Use vfx.speedx for clarity
-    subclip = subclip.fx(vfx.speedx, speed)
+        print(f"🎞️  Processing {video_path} ...")
+        try:
+            clip = VideoFileClip(video_path)
+        except Exception as e:
+            print(f"❌ Failed to open '{video_path}': {e}")
+            continue
 
-    # Add watermark
-    watermark = make_watermark(WATERMARK_TEXT, subclip.duration, w, h)
-    final_clip = CompositeVideoClip([subclip, watermark]) if watermark else subclip
+        try:
+            w, h = clip.size
 
-    # Export
-    final_clip.write_videofile(
-        output_video_path,
-        codec="libx264",
-        audio_codec="aac",
-        threads=4,
-        logger=None,
-    )
+            # Trim 0.2s from start and end (guard for very short clips)
+            start = 0.2
+            end = max(clip.duration - 0.2, 0.5)
+            subclip = clip.subclip(start, end)
 
-    # Caption
-    if os.path.exists(caption_path):
-        with open(caption_path, "r", encoding="utf-8") as f:
-            caption = f.read().strip()
-    else:
-        caption = ""
-    caption = (caption + " " + random.choice(EMOJIS)).strip() + f"\n{random.choice(HASHTAGS)}"
-    with open(output_caption_path, "w", encoding="utf-8") as f:
-        f.write(caption)
+            # Random speed-up 1–3%
+            speed = 1 + random.uniform(0.01, 0.03)
+            subclip = subclip.fx(vfx.speedx, speed)
 
-    clip.close()
-    subclip.close()
-    final_clip.close()
-    print(f"✅  Done: {output_video_path}")
+            # Watermark
+            watermark = make_watermark_badge(WATERMARK_TEXT, subclip.duration, w, h)
+            final_clip = CompositeVideoClip([subclip, watermark]) if watermark else subclip
 
-print("🎉  All videos processed successfully!")
+            # Keep FPS stable (source fps if known, else 30)
+            try:
+                fps = getattr(clip, "fps", None) or getattr(subclip, "fps", None) or 30
+            except Exception:
+                fps = 30
+
+            # Export
+            final_clip.write_videofile(
+                output_video_path,
+                codec="libx264",
+                audio_codec="aac",
+                threads=4,
+                fps=fps,
+                logger=None,
+            )
+
+            # Caption handling
+            if os.path.exists(caption_path):
+                with open(caption_path, "r", encoding="utf-8") as f:
+                    caption = f.read().strip()
+            else:
+                caption = ""
+
+            caption = (caption + " " + random.choice(EMOJIS)).strip()
+            caption += f"\n{random.choice(HASHTAGS)}"
+
+            with open(output_caption_path, "w", encoding="utf-8") as f:
+                f.write(caption)
+
+            print(f"✅  Done: {output_video_path}")
+
+        except Exception as e:
+            print(f"❌ Error processing '{video_path}': {e}")
+
+        finally:
+            # Clean up resources
+            try:
+                if 'final_clip' in locals() and final_clip is not clip:
+                    final_clip.close()
+            except Exception:
+                pass
+            try:
+                if 'subclip' in locals() and subclip is not clip:
+                    subclip.close()
+            except Exception:
+                pass
+            try:
+                clip.close()
+            except Exception:
+                pass
+
+    print("🎉  All videos processed successfully!")
+
+
+if __name__ == "__main__":
+    # Ensure deterministic emoji/hashtag if needed by CI (comment out to keep random)
+    random.seed()
+    main()

@@ -3,7 +3,10 @@ name: Process Reels
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 15 * * *"
+    - cron: "0 15 * * *" # 15:00 UTC daily
+
+permissions:
+  contents: write  # needed to push back to the repo
 
 jobs:
   edit_reels:
@@ -12,6 +15,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -21,19 +26,30 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install moviepy==1.0.3 Pillow imageio[ffmpeg] requests numpy
+          pip install "moviepy==1.0.3" "Pillow>=10,<11" "imageio[ffmpeg]" requests numpy
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-roboto fonts-dejavu-core
           echo "✅ Dependencies installed"
-
 
       - name: Run video editor script
         run: python auto_edit_my_reels.py
 
       - name: Commit and push processed files
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
-          git add output_reels
-          git commit -m "Processed reels automatically"
-          git push
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          # Make sure we’re on the current ref and up to date
+          CURRENT_BRANCH="${GITHUB_REF_NAME}"
+          git checkout "$CURRENT_BRANCH"
+          git pull --rebase
+          # Add only the outputs
+          git add output_reels || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Processed reels automatically"
+            git push
+          fi
