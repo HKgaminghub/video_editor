@@ -2,21 +2,27 @@ import os, random, requests
 from moviepy.editor import VideoFileClip, CompositeVideoClip
 from moviepy.video.VideoClip import TextClip
 
+# === DISABLE IMAGEMAGICK COMPLETELY ===
+if "IMAGEMAGICK_BINARY" in os.environ:
+    del os.environ["IMAGEMAGICK_BINARY"]
+
 # === CONFIGURATION ===
-INPUT_DIR = "reels_downloads"      # folder with 1.mp4, 1.txt, etc.
-OUTPUT_DIR = "output_reels"        # edited files will go here
-WATERMARK_TEXT = "@my_page"        # watermark text
-FONT_SIZE = 50
-FONT_COLOR = "white"
-STROKE_COLOR = "black"
+INPUT_DIR = "reels_downloads"          # Folder with 1.mp4, 1.txt, etc.
+OUTPUT_DIR = "output_reels"            # Edited files will go here
+WATERMARK_TEXT = "@my_page"            # Your watermark text
+FONT_SIZE = 50                         # Adjust to your preference
+FONT_COLOR = "white"                   # Watermark text color
+STROKE_COLOR = "black"                 # Outline color for visibility
 STROKE_WIDTH = 2
 
+# Emoji & hashtag pools for small caption edits
 EMOJIS = ["🔥", "💫", "🎬", "✨", "⚡", "🎵"]
 HASHTAGS = ["#reels", "#foryou", "#explore", "#trending", "#viral"]
 
+# Create output folder if not exists
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# === Ensure a font exists (GitHub runners have none) ===
+# === Ensure a Font Exists (GitHub runner has none) ===
 FONT_PATH = "Roboto-Regular.ttf"
 if not os.path.exists(FONT_PATH):
     print("📥 Downloading Roboto font for watermark text...")
@@ -24,25 +30,27 @@ if not os.path.exists(FONT_PATH):
     r = requests.get(url)
     with open(FONT_PATH, "wb") as f:
         f.write(r.content)
-    print("✅ Font downloaded")
+    print("✅ Font downloaded successfully")
 
+# === Watermark Function (Pillow-based only) ===
 def make_watermark(text, duration):
-    """Create watermark text using Pillow backend."""
     try:
-        wm = (TextClip(
+        return (
+            TextClip(
                 text,
                 fontsize=FONT_SIZE,
                 color=FONT_COLOR,
-                font=FONT_PATH,              # explicit font
+                font=FONT_PATH,            # Use local .ttf font
                 stroke_color=STROKE_COLOR,
                 stroke_width=STROKE_WIDTH,
-                method="caption")
-              .set_duration(duration)
-              .set_position(("right", "bottom"))
-              .margin(right=40, bottom=40, opacity=0))
-        return wm
+                method="caption"           # Force Pillow backend
+            )
+            .set_duration(duration)
+            .set_position(("right", "bottom"))
+            .margin(right=40, bottom=40, opacity=0)
+        )
     except Exception as e:
-        print(f"⚠️  TextClip failed ({e}), skipping watermark.")
+        print(f"⚠️ Warning: Watermark creation failed ({e}), skipping watermark.")
         return None
 
 # === PROCESSING LOOP ===
@@ -56,24 +64,24 @@ for file in sorted(os.listdir(INPUT_DIR)):
     output_video_path = os.path.join(OUTPUT_DIR, f"{base}.mp4")
     output_caption_path = os.path.join(OUTPUT_DIR, f"{base}.txt")
 
-    print(f"🎞️  Processing {video_path} ...")
+    print(f"🎞️ Processing {video_path} ...")
 
     clip = VideoFileClip(video_path)
 
-    # Trim 0.2 s start & end
+    # Trim 0.2s from start & end
     start = 0.2
     end = max(clip.duration - 0.2, 0.5)
     subclip = clip.subclip(start, end)
 
-    # Random speed change (1–3 %)
+    # Slight random speed change (1–3%)
     speed = 1 + random.uniform(0.01, 0.03)
     subclip = subclip.fx(lambda c: c.speedx(speed))
 
-    # Add watermark
+    # Add watermark (if possible)
     watermark = make_watermark(WATERMARK_TEXT, subclip.duration)
     final_clip = CompositeVideoClip([subclip, watermark]) if watermark else subclip
 
-    # Export video
+    # Export edited video
     final_clip.write_videofile(
         output_video_path,
         codec="libx264",
@@ -82,7 +90,7 @@ for file in sorted(os.listdir(INPUT_DIR)):
         logger=None
     )
 
-    # Caption tweak
+    # Modify caption text
     if os.path.exists(caption_path):
         with open(caption_path, "r", encoding="utf-8") as f:
             caption = f.read().strip()
@@ -90,12 +98,14 @@ for file in sorted(os.listdir(INPUT_DIR)):
         caption = ""
 
     caption += f" {random.choice(EMOJIS)}\n{random.choice(HASHTAGS)}"
+
     with open(output_caption_path, "w", encoding="utf-8") as f:
         f.write(caption)
 
     clip.close()
     subclip.close()
     final_clip.close()
+
     print(f"✅ Done: {output_video_path}")
 
-print("🎉  All videos processed successfully!")
+print("🎉 All videos processed successfully!")

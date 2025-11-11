@@ -3,14 +3,14 @@ name: Process Reels
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 15 * * *"  # optional daily run
+    - cron: "0 15 * * *"  # Optional: every day at 8:30 PM IST
 
 jobs:
   edit_reels:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -26,10 +26,10 @@ jobs:
           sudo apt-get install -y ffmpeg
           echo "✅ Dependencies installed"
 
-      - name: Run video editor
+      - name: Run video editor script
         run: python auto_edit_my_reels.py
 
-      - name: Commit and push output
+      - name: Commit and push processed files
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
