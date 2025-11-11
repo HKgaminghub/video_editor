@@ -28,9 +28,8 @@ if not os.path.exists(FONT_PATH):
 
 
 def make_watermark(text, duration, w, h):
-    """Render watermark text to a temporary PNG file and load as ImageClip."""
+    """Render watermark text to PNG and read it back as an ImageClip."""
     try:
-        # Draw text on transparent RGBA image
         img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
         font = ImageFont.truetype(FONT_PATH, FONT_SIZE)
@@ -46,22 +45,25 @@ def make_watermark(text, duration, w, h):
         # Main text
         draw.text((x, y), text, font=font, fill=FONT_COLOR)
 
-        # Save to a temporary PNG file
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-            img.save(tmp.name, format="PNG")
-            tmp_path = tmp.name
+        # Save to temporary PNG
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".png")
+        os.close(tmp_fd)
+        img.save(tmp_path, "PNG")
 
-        # Load the saved image as an ImageClip
+        # Load PNG explicitly
         watermark_clip = (
-            ImageClip(tmp_path)
+            ImageClip(tmp_path, transparent=True)
             .set_duration(duration)
             .set_position(("right", "bottom"))
             .margin(right=40, bottom=40)
         )
+
+        # Cleanup temp file after loading
+        os.remove(tmp_path)
         return watermark_clip
 
     except Exception as e:
-        print(f"⚠️  Warning: Pillow watermark failed ({e}), skipping watermark.")
+        print(f"⚠️ Warning: Pillow watermark failed ({e}), skipping watermark.")
         return None
 
 
@@ -76,7 +78,7 @@ for file in sorted(os.listdir(INPUT_DIR)):
     output_video_path = os.path.join(OUTPUT_DIR, f"{base}.mp4")
     output_caption_path = os.path.join(OUTPUT_DIR, f"{base}.txt")
 
-    print(f"🎞️  Processing {video_path} ...")
+    print(f"🎞️ Processing {video_path} ...")
 
     clip = VideoFileClip(video_path)
     w, h = clip.size
@@ -114,6 +116,6 @@ for file in sorted(os.listdir(INPUT_DIR)):
     clip.close()
     subclip.close()
     final_clip.close()
-    print(f"✅  Done: {output_video_path}")
+    print(f"✅ Done: {output_video_path}")
 
-print("🎉  All videos processed successfully!")
+print("🎉 All videos processed successfully!")
