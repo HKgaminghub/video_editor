@@ -1,14 +1,15 @@
 import os, random
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
 
+# === FIX: disable ImageMagick and use Pillow backend ===
+os.environ["IMAGEMAGICK_BINARY"] = "unset"
+
 # === CONFIGURATION ===
 INPUT_DIR = "reels_downloads"          # your folder with 1.mp4, 1.txt, etc.
-OUTPUT_DIR = "output_reels"         # edited files will go here
-WATERMARK_TEXT = "@my_page"         # your watermark text
-FONT_SIZE = 50                      # adjust to your preference
-FONT_COLOR = "white"                # watermark text color
-STROKE_COLOR = "black"              # outline color for visibility
-STROKE_WIDTH = 2
+OUTPUT_DIR = "output_reels"            # edited files will go here
+WATERMARK_TEXT = "@my_page"            # your watermark text
+FONT_SIZE = 50                         # adjust to your preference
+FONT_COLOR = "white"                   # watermark text color
 
 # Emoji & hashtag pools for small caption edits
 EMOJIS = ["🔥", "💫", "🎬", "✨", "⚡", "🎵"]
@@ -42,14 +43,12 @@ for file in sorted(os.listdir(INPUT_DIR)):
     speed = 1 + random.uniform(0.01, 0.03)
     subclip = subclip.fx(lambda c: c.speedx(speed))
 
-    # Add watermark
+    # Add watermark (using Pillow, no ImageMagick)
     watermark = (
         TextClip(WATERMARK_TEXT,
                  fontsize=FONT_SIZE,
                  color=FONT_COLOR,
-                 stroke_color=STROKE_COLOR,
-                 stroke_width=STROKE_WIDTH,
-                 font="Arial-Bold")
+                 method="caption")  # <--- uses Pillow, safe in GitHub Actions
         .set_duration(subclip.duration)
         .set_position(("right", "bottom"))
         .margin(right=40, bottom=40, opacity=0)

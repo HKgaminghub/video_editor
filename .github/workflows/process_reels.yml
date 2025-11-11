@@ -1,9 +1,9 @@
 name: Process Reels
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:    # Run manually
   schedule:
-    - cron: "0 15 * * *"
+    - cron: "0 15 * * *"  # Optional: every day at 8:30 PM IST
 
 jobs:
   edit_reels:
@@ -21,16 +21,16 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install moviepy==1.0.3
+          pip install moviepy pillow
           sudo apt-get update
-          sudo apt-get install -y ffmpeg imagemagick
-          echo "Dependencies installed successfully ✅"
+          sudo apt-get install -y ffmpeg
+          echo "✅ Dependencies installed"
 
-      - name: Run script
+      - name: Run the video editor script
         run: |
           python auto_edit_my_reels.py
 
-      - name: Commit and push output
+      - name: Commit and push processed output
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
