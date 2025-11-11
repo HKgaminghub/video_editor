@@ -1,9 +1,9 @@
 name: Process Reels
 
 on:
-  workflow_dispatch:    # Run manually
+  workflow_dispatch:
   schedule:
-    - cron: "0 15 * * *"  # Optional: every day at 8:30 PM IST
+    - cron: "0 15 * * *"  # optional: every day at 8:30 PM IST
 
 jobs:
   edit_reels:
@@ -21,14 +21,25 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install moviepy pillow
+          pip install moviepy==1.0.3 Pillow imageio[ffmpeg]
           sudo apt-get update
           sudo apt-get install -y ffmpeg
           echo "✅ Dependencies installed"
+          python -m pip show moviepy
+
+      - name: Verify moviepy import
+        run: |
+          python - <<'EOF'
+          try:
+              import moviepy
+              from moviepy.editor import VideoFileClip
+              print("✅ MoviePy import successful")
+          except Exception as e:
+              print("❌ MoviePy import failed:", e)
+          EOF
 
       - name: Run the video editor script
-        run: |
-          python auto_edit_my_reels.py
+        run: python auto_edit_my_reels.py
 
       - name: Commit and push processed output
         run: |
