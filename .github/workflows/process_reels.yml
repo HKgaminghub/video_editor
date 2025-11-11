@@ -6,7 +6,7 @@ on:
     - cron: "0 15 * * *" # 15:00 UTC daily
 
 permissions:
-  contents: write  # needed to push back to the repo
+  contents: write
 
 jobs:
   edit_reels:
@@ -26,7 +26,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install "moviepy==1.0.3" "Pillow>=10,<11" "imageio[ffmpeg]" requests numpy
+          pip install "moviepy==1.0.3" "Pillow>=10,<11" "imageio[ffmpeg]" numpy requests
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-roboto fonts-dejavu-core
           echo "✅ Dependencies installed"

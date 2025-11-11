@@ -2,6 +2,7 @@ import os
 import random
 import tempfile
 
+import numpy as np
 from moviepy.editor import VideoFileClip, CompositeVideoClip, ImageClip, vfx
 from PIL import Image, ImageDraw, ImageFont
 
@@ -37,46 +38,53 @@ def resolve_font(size_px: int):
     return ImageFont.load_default()
 
 # =========================
-# TEXT-ONLY WATERMARK
+# TEXT-ONLY WATERMARK (no black fringe)
 # =========================
 def make_watermark(text: str, duration: float, w: int, h: int) -> ImageClip | None:
     """
-    White text with black stroke, NO background.
-    Produces a tightly-cropped transparent PNG so no black/gray box appears.
+    White text with black stroke on a fully transparent canvas.
+    Uses alpha-premultiplication to prevent black bars/edges in ffmpeg composition.
     """
     try:
-        font_px  = max(28, int(h * 0.05))       # ~5% of video height
-        stroke_w = max(2,  int(font_px * 0.08)) # proportional stroke
+        font_px  = max(28, int(h * 0.05))        # ~5% of video height
+        stroke_w = max(2,  int(font_px * 0.08))  # proportional stroke
         font     = resolve_font(font_px)
 
-        # Measure text tightly
-        tmp = Image.new("RGBA", (10, 10), (0, 0, 0, 0))
-        drw = ImageDraw.Draw(tmp)
+        # Measure tight bounding box
+        dummy = Image.new("L", (10, 10))
+        d = ImageDraw.Draw(dummy)
         try:
-            bbox = drw.textbbox((0, 0), text, font=font, stroke_width=stroke_w)
+            bbox = d.textbbox((0, 0), text, font=font, stroke_width=stroke_w)
         except TypeError:
-            bbox = drw.textbbox((0, 0), text, font=font)
+            bbox = d.textbbox((0, 0), text, font=font)
         text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
 
-        # Render tight image (no background)
+        # Render text to RGBA
         img = Image.new("RGBA", (text_w, text_h), (0, 0, 0, 0))
-        d2  = ImageDraw.Draw(img)
+        draw = ImageDraw.Draw(img)
         try:
-            d2.text(
+            draw.text(
                 (0, 0), text, font=font,
                 fill=(255, 255, 255, 255),
-                stroke_width=stroke_w, stroke_fill=(0, 0, 0, 255)
+                stroke_width=stroke_w, stroke_fill=(0, 0, 0, 255),
             )
         except TypeError:
-            # Manual stroke fallback for very old Pillow
+            # Manual stroke fallback for older Pillow
             for dx in (-stroke_w, 0, stroke_w):
                 for dy in (-stroke_w, 0, stroke_w):
-                    d2.text((dx, dy), text, font=font, fill=(0, 0, 0, 255))
-            d2.text((0, 0), text, font=font, fill=(255, 255, 255, 255))
+                    draw.text((dx, dy), text, font=font, fill=(0, 0, 0, 255))
+            draw.text((0, 0), text, font=font, fill=(255, 255, 255, 255))
 
-        # Save PNG & wrap as ImageClip
+        # --- Alpha premultiplication to avoid black fringe/bars in encoding ---
+        arr = np.asarray(img).astype(np.float32) / 255.0   # HxWx4, RGBA in [0,1]
+        rgb = arr[..., :3] * arr[..., 3:4]                 # multiply by alpha
+        arr_premul = np.concatenate([rgb, arr[..., 3:4]], axis=-1)
+        img_p = Image.fromarray((arr_premul * 255).astype(np.uint8), mode="RGBA")
+        # ----------------------------------------------------------------------
+
+        # Save tight PNG & wrap as MoviePy ImageClip
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmpf:
-            img.save(tmpf.name, "PNG")
+            img_p.save(tmpf.name, "PNG")
             path = tmpf.name
 
         margin_r = max(40, int(w * 0.035))
@@ -88,8 +96,9 @@ def make_watermark(text: str, duration: float, w: int, h: int) -> ImageClip | No
             .set_position(("right", "bottom"))
             .margin(right=margin_r, bottom=margin_b)
         )
+
     except Exception as e:
-        print(f"⚠️  Warning: watermark generation failed ({e}), skipping watermark.")
+        print(f"⚠️  Watermark generation failed ({e}), skipping watermark.")
         return None
 
 # =========================
@@ -122,7 +131,7 @@ def main():
         try:
             w, h = clip.size
 
-            # Trim 0.2s from start and end (guard for very short clips)
+            # Trim 0.2s from start and end (guard for very short videos)
             start = 0.2
             end = max(clip.duration - 0.2, 0.5)
             subclip = clip.subclip(start, end)
@@ -131,7 +140,7 @@ def main():
             speed = 1 + random.uniform(0.01, 0.03)
             subclip = subclip.fx(vfx.speedx, speed)
 
-            # Watermark (text only)
+            # Watermark (text-only, premultiplied)
             watermark = make_watermark(WATERMARK_TEXT, subclip.duration, w, h)
             final_clip = CompositeVideoClip([subclip, watermark]) if watermark else subclip
 
@@ -170,6 +179,7 @@ def main():
             print(f"❌ Error processing '{video_path}': {e}")
 
         finally:
+            # Clean up resources
             try:
                 if 'final_clip' in locals() and final_clip is not clip:
                     final_clip.close()
